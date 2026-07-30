@@ -2,6 +2,8 @@ import requests
 import os
 import re
 from datetime import datetime
+from email.utils import parsedate_to_datetime
+import time
 
 # CONFIGURATION
 DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK')
@@ -23,8 +25,8 @@ def save_last_known_id(tweet_id):
 def send_to_discord(title, link, content):
     payload = {
         "content": f"🚨 **HERE WE GO!** 🚨\n\n{content}\n\n[Read on X]({link})",
-        "username": "Fabrizio Tracker",
-        "avatar_url": "https://pbs.twimg.com/profile_images/1234567890/fabrizio.jpg" # Optional avatar
+        "username": "Lutay FootBot",
+        "avatar_url": "https://imgur.com/a/DslvNrQ.png" # Optional avatar
     }
     requests.post(DISCORD_WEBHOOK, json=payload)
 
@@ -75,3 +77,25 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+# ... inside main(), after extracting latest_item ...
+# Extract PubDate
+date_match = re.search(r'<pubDate>(.*?)</pubDate>', latest_item)
+if date_match:
+    pub_date_str = date_match.group(1)
+    tweet_date = parsedate_to_datetime(pub_date_str)
+    now = datetime.now(tweet_date.tzinfo)
+    
+    # Only process if tweet is less than 15 minutes old (covers the cron interval)
+    if (now - tweet_date).total_seconds() < 900: 
+        if "here we go" in tweet_text.lower():
+             send_to_discord("Transfer Alert", tweet_link, tweet_text)
+             print("Alert sent!")
+        else:
+             print("Recent tweet, but no keyword.")
+    else:
+        print("Tweet too old, skipping.")
+else:
+    print("Could not parse date.")
