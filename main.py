@@ -23,7 +23,7 @@ NITTER_INSTANCES = [
 def send_to_discord(link, content):
     payload = {
         "content": f"🚨 **HERE WE GO!** 🚨\n\n{content}\n\n[Read on X]({link})",
-        "username": "Fabrizio Tracker"
+        "username": "Lutay FootBot"
     }
     resp = requests.post(DISCORD_WEBHOOK, json=payload)
     print(f"Discord response: {resp.status_code}")
