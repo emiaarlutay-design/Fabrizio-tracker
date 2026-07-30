@@ -3,99 +3,91 @@ import os
 import re
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-import time
 
 # CONFIGURATION
 DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK')
-# Using a public Nitter instance to scrape Fabrizio Romano without API keys
-# Nitter instances can change; if one fails, try another like nitter.net or nitter.privacydev.net
-NITTER_URL = "https://nitter.privacydev.net/FabrizioRomano/rss" 
-LAST_TWEET_FILE = "last_tweet.txt"
+USERNAME = "FabrizioRomano"
+KEYWORD = "here we go"
 
-def get_last_known_id():
-    if os.path.exists(LAST_TWEET_FILE):
-        with open(LAST_TWEET_FILE, "r") as f:
-            return f.read().strip()
-    return None
+# List of Nitter instances to try (fallback system)
+# If all these die, check https://status.d420.de/ for new working ones
+NITTER_INSTANCES = [
+    "https://nitter.net",
+    "https://nitter.poast.org",
+    "https://nitter.tiekoetter.com",
+    "https://lightbrd.com",
+    "https://nitter.privacyredirect.com",
+    "https://xcancel.com"
+]
 
-def save_last_known_id(tweet_id):
-    with open(LAST_TWEET_FILE, "w") as f:
-        f.write(tweet_id)
-
-def send_to_discord(title, link, content):
+def send_to_discord(link, content):
     payload = {
         "content": f"🚨 **HERE WE GO!** 🚨\n\n{content}\n\n[Read on X]({link})",
-        "username": "Lutay FootBot",
-        "avatar_url": "https://imgur.com/a/DslvNrQ.png" # Optional avatar
+        "username": "Fabrizio Tracker"
     }
-    requests.post(DISCORD_WEBHOOK, json=payload)
+    resp = requests.post(DISCORD_WEBHOOK, json=payload)
+    print(f"Discord response: {resp.status_code}")
+
+def fetch_rss():
+    """Try each instance until one returns valid data."""
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    for base in NITTER_INSTANCES:
+        url = f"{base}/{USERNAME}/rss"
+        try:
+            print(f"Trying: {url}")
+            response = requests.get(url, headers=headers, timeout=15)
+            if response.status_code == 200 and "<item>" in response.text:
+                print(f"✅ Success with {base}")
+                return response.text
+            else:
+                print(f"❌ {base} returned status {response.status_code} or no items")
+        except Exception as e:
+            print(f"❌ {base} failed: {e}")
+    return None
 
 def main():
-    try:
-        response = requests.get(NITTER_URL, headers={'User-Agent': 'Mozilla/5.0'})
-        response.raise_for_status()
-        
-        # Parse simple RSS XML manually to avoid heavy dependencies
-        items = re.findall(r'<item>(.*?)</item>', response.text, re.DOTALL)
-        
-        if not items:
-            print("No tweets found or Nitter down.")
-            return
+    rss_data = fetch_rss()
 
-        # Get the newest tweet (first item in RSS)
-        latest_item = items[0]
-        
-        # Extract Title (usually the tweet text)
-        title_match = re.search(r'<title>(.*?)</title>', latest_item)
-        link_match = re.search(r'<link>(.*?)</link>', latest_item)
-        guid_match = re.search(r'<guid>(.*?)</guid>', latest_item) # Unique ID
-        
-        if not all([title_match, link_match, guid_match]):
-            return
+    if not rss_data:
+        print("All Nitter instances failed. Exiting.")
+        return
 
-        tweet_text = title_match.group(1)
-        tweet_link = link_match.group(1)
-        tweet_id = guid_match.group(1)
+    items = re.findall(r'<item>(.*?)</item>', rss_data, re.DOTALL)
+    if not items:
+        print("No tweets found in feed.")
+        return
 
-        last_known = get_last_known_id()
+    # Newest tweet is the first item
+    latest_item = items[0]
 
-        # If we haven't seen this tweet AND it contains "Here we go"
-        if last_known != tweet_id:
-            if "here we go" in tweet_text.lower():
-                print(f"Match found! Sending to Discord: {tweet_text}")
-                send_to_discord("Transfer Alert", tweet_link, tweet_text)
-            else:
-                print(f"New tweet found but no match: {tweet_text[:50]}...")
-            
-            # Update state regardless of match to prevent re-checking old tweets
-            save_last_known_id(tweet_id)
+    title_match = re.search(r'<title>(.*?)</title>', latest_item)
+    link_match = re.search(r'<link>(.*?)</link>', latest_item)
+    date_match = re.search(r'<pubDate>(.*?)</pubDate>', latest_item)
+
+    if not (title_match and link_match and date_match):
+        print("Could not parse tweet fields.")
+        return
+
+    tweet_text = title_match.group(1)
+    tweet_link = link_match.group(1)
+    pub_date_str = date_match.group(1)
+
+    # Check how old the tweet is
+    tweet_date = parsedate_to_datetime(pub_date_str)
+    now = datetime.now(tweet_date.tzinfo)
+    age_seconds = (now - tweet_date).total_seconds()
+
+    print(f"Latest tweet ({int(age_seconds)}s old): {tweet_text[:80]}")
+
+    # Only post if tweet is recent (within 15 mins) AND contains keyword
+    if age_seconds < 900:
+        if KEYWORD in tweet_text.lower():
+            print("MATCH! Sending to Discord...")
+            send_to_discord(tweet_link, tweet_text)
         else:
-            print("No new tweets since last check.")
-
-    except Exception as e:
-        print(f"Error: {e}")
+            print("Recent tweet, but no keyword match.")
+    else:
+        print("Tweet too old, skipping.")
 
 if __name__ == "__main__":
     main()
-
-
-
-# ... inside main(), after extracting latest_item ...
-# Extract PubDate
-date_match = re.search(r'<pubDate>(.*?)</pubDate>', latest_item)
-if date_match:
-    pub_date_str = date_match.group(1)
-    tweet_date = parsedate_to_datetime(pub_date_str)
-    now = datetime.now(tweet_date.tzinfo)
-    
-    # Only process if tweet is less than 15 minutes old (covers the cron interval)
-    if (now - tweet_date).total_seconds() < 900: 
-        if "here we go" in tweet_text.lower():
-             send_to_discord("Transfer Alert", tweet_link, tweet_text)
-             print("Alert sent!")
-        else:
-             print("Recent tweet, but no keyword.")
-    else:
-        print("Tweet too old, skipping.")
-else:
-    print("Could not parse date.")
