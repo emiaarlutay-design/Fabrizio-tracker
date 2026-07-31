@@ -80,7 +80,7 @@ def main():
     print(f"Latest tweet ({int(age_seconds)}s old): {tweet_text[:80]}")
 
     # Only post if tweet is recent (within 15 mins) AND contains keyword
-    if age_seconds < 900:
+    if age_seconds < 3600:
         if KEYWORD in tweet_text.lower():
             print("MATCH! Sending to Discord...")
             send_to_discord(tweet_link, tweet_text)
