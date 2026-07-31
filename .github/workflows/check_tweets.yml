@@ -19,11 +19,11 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
+          cache: 'pip'
 
       - name: Install dependencies
         run: pip install -r requirements.txt
-
-      
+        
       - name: Run Script
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
@@ -37,3 +37,6 @@ jobs:
           git add posted_ids.txt
           git diff --staged --quiet || git commit -m "Update posted IDs"
           git push
+
+
+             
