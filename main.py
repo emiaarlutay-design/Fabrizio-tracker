@@ -8,7 +8,7 @@ from urllib.parse import unquote
 # CONFIGURATION
 DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK')
 USERNAME = "FabrizioRomano"
-KEYWORD = "here we go"
+KEYWORDS = ["here we go", "done deal", "medical booked", "medical scheduled"]   # add more phrases here anytime
 POSTED_FILE = "posted_ids.txt"
 TWEETS_TO_CHECK = 20
 MAX_STORED_IDS = 100
@@ -146,7 +146,8 @@ def main():
             continue
 
         already_seen = tweet_id in posted_set
-        has_keyword = KEYWORD in tweet_text.lower()
+        text_lower = tweet_text.lower()
+        has_keyword = any(kw in text_lower for kw in KEYWORDS)
 
         print(f"[{i}] TEXT: {tweet_text[:100]}")
         print(f"     Already seen? {already_seen} | Has keyword? {has_keyword}")
