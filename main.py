@@ -1,9 +1,8 @@
-
 import requests
 import os
 import re
+import html
 from datetime import datetime
-from email.utils import parsedate_to_datetime
 
 # CONFIGURATION
 DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK')
@@ -18,18 +17,18 @@ NITTER_INSTANCES = [
     "https://nitter.tiekoetter.com",
     "https://lightbrd.com",
     "https://nitter.privacyredirect.com",
-    "https://xcancel.com"
+    "https://xcancel.com",
+    "https://nitter.space",
+    "https://nitter.kuuro.net"
 ]
 
 def load_posted_ids():
-    """Load the set of tweet IDs we've already sent to Discord."""
     if os.path.exists(POSTED_FILE):
         with open(POSTED_FILE, "r") as f:
             return set(line.strip() for line in f if line.strip())
     return set()
 
 def save_posted_id(tweet_id):
-    """Append a newly posted tweet ID to the file."""
     with open(POSTED_FILE, "a") as f:
         f.write(tweet_id + "\n")
 
@@ -69,39 +68,48 @@ def main():
         return
 
     posted_ids = load_posted_ids()
-    print(f"Loaded {len(posted_ids)} previously posted IDs.")
+    print(f"\nLoaded {len(posted_ids)} previously posted IDs.")
+    print(f"Found {len(items)} tweets in feed. Checking latest {TWEETS_TO_CHECK}.\n")
+    print("=" * 60)
 
-    # Check the latest N tweets (process oldest->newest so Discord order is chronological)
     recent_items = items[:TWEETS_TO_CHECK]
 
-    for item in reversed(recent_items):
-        title_match = re.search(r'<title>(.*?)</title>', item)
-        link_match = re.search(r'<link>(.*?)</link>', item)
-        guid_match = re.search(r'<guid>(.*?)</guid>', item)
+    for i, item in enumerate(reversed(recent_items)):
+        title_match = re.search(r'<title>(.*?)</title>', item, re.DOTALL)
+        link_match = re.search(r'<link>(.*?)</link>', item, re.DOTALL)
+        guid_match = re.search(r'<guid>(.*?)</guid>', item, re.DOTALL)
 
         if not (title_match and link_match and guid_match):
+            print(f"[{i}] Could not parse fields, skipping.")
             continue
 
-        tweet_text = title_match.group(1)
-        tweet_link = link_match.group(1)
-        tweet_id = guid_match.group(1)
+        # Decode HTML entities (&amp; &#39; etc.) so matching works
+        tweet_text = html.unescape(title_match.group(1))
+        tweet_link = link_match.group(1).strip()
+        tweet_id = guid_match.group(1).strip()
 
-        # Skip if we've already posted this one
-        if tweet_id in posted_ids:
+        already_seen = tweet_id in posted_ids
+        has_keyword = KEYWORD in tweet_text.lower()
+
+        # DEBUG output for every tweet
+        print(f"[{i}] TEXT: {tweet_text[:100]}")
+        print(f"     ID: {tweet_id}")
+        print(f"     Already seen? {already_seen} | Has keyword? {has_keyword}")
+
+        if already_seen:
+            print("     -> SKIP (already posted/seen)\n")
             continue
 
-        # Check for keyword
-        if KEYWORD in tweet_text.lower():
-            print(f"MATCH! Sending: {tweet_text[:80]}")
+        if has_keyword:
+            print("     -> MATCH! Sending to Discord...\n")
             send_to_discord(tweet_link, tweet_text)
-            save_posted_id(tweet_id)
-            posted_ids.add(tweet_id)
         else:
-            # Mark non-matching tweets as "seen" too, so we don't re-check them forever
-            save_posted_id(tweet_id)
-            posted_ids.add(tweet_id)
-            print(f"Seen (no match): {tweet_text[:60]}")
+            print("     -> No keyword match.\n")
 
+        save_posted_id(tweet_id)
+        posted_ids.add(tweet_id)
+
+    print("=" * 60)
     print("Done.")
 
 if __name__ == "__main__":
