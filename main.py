@@ -1,8 +1,7 @@
 import requests
 import os
-import re
 import html
-from datetime import datetime
+import xml.etree.ElementTree as ET
 
 # CONFIGURATION
 DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK')
@@ -62,9 +61,17 @@ def main():
         print("All Nitter instances failed. Exiting.")
         return
 
-    items = re.findall(r'<item>(.*?)</item>', rss_data, re.DOTALL)
+    # Parse XML properly
+    try:
+        root = ET.fromstring(rss_data)
+    except ET.ParseError as e:
+        print(f"XML parse error: {e}")
+        return
+
+    # RSS structure: rss > channel > item
+    items = root.findall(".//item")
     if not items:
-        print("No tweets found in feed.")
+        print("No <item> elements found.")
         return
 
     posted_ids = load_posted_ids()
@@ -75,29 +82,27 @@ def main():
     recent_items = items[:TWEETS_TO_CHECK]
 
     for i, item in enumerate(reversed(recent_items)):
-        title_match = re.search(r'<title>(.*?)</title>', item, re.DOTALL)
-        link_match = re.search(r'<link>(.*?)</link>', item, re.DOTALL)
-        guid_match = re.search(r'<guid>(.*?)</guid>', item, re.DOTALL)
+        title_el = item.find("title")
+        link_el = item.find("link")
+        guid_el = item.find("guid")
 
-        if not (title_match and link_match and guid_match):
-            print(f"[{i}] Could not parse fields, skipping.")
+        tweet_text = html.unescape(title_el.text) if title_el is not None and title_el.text else ""
+        tweet_link = link_el.text.strip() if link_el is not None and link_el.text else ""
+        tweet_id = guid_el.text.strip() if guid_el is not None and guid_el.text else tweet_link
+
+        if not tweet_text or not tweet_id:
+            print(f"[{i}] Empty fields, skipping.")
             continue
-
-        # Decode HTML entities (&amp; &#39; etc.) so matching works
-        tweet_text = html.unescape(title_match.group(1))
-        tweet_link = link_match.group(1).strip()
-        tweet_id = guid_match.group(1).strip()
 
         already_seen = tweet_id in posted_ids
         has_keyword = KEYWORD in tweet_text.lower()
 
-        # DEBUG output for every tweet
         print(f"[{i}] TEXT: {tweet_text[:100]}")
         print(f"     ID: {tweet_id}")
         print(f"     Already seen? {already_seen} | Has keyword? {has_keyword}")
 
         if already_seen:
-            print("     -> SKIP (already posted/seen)\n")
+            print("     -> SKIP (already posted)\n")
             continue
 
         if has_keyword:
