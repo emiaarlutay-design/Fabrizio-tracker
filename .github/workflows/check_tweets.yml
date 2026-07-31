@@ -33,6 +33,7 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
+          touch posted_ids.txt
           git add posted_ids.txt
           git diff --staged --quiet || git commit -m "Update posted IDs"
           git push
