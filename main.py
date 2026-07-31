@@ -1,7 +1,9 @@
 import requests
 import os
 import html
+import re
 import xml.etree.ElementTree as ET
+from urllib.parse import unquote
 
 # CONFIGURATION
 DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK')
@@ -9,7 +11,7 @@ USERNAME = "FabrizioRomano"
 KEYWORD = "here we go"
 POSTED_FILE = "posted_ids.txt"
 TWEETS_TO_CHECK = 20
-MAX_STORED_IDS = 100   # keep only the last 100 IDs
+MAX_STORED_IDS = 100
 
 NITTER_INSTANCES = [
     "https://nitter.net",
@@ -22,26 +24,69 @@ NITTER_INSTANCES = [
     "https://nitter.kuuro.net"
 ]
 
+
 def load_posted_ids():
-    """Return list (ordered) of previously posted IDs."""
     if os.path.exists(POSTED_FILE):
         with open(POSTED_FILE, "r") as f:
             return [line.strip() for line in f if line.strip()]
     return []
 
+
 def save_posted_ids(id_list):
-    """Rewrite the file, keeping only the most recent MAX_STORED_IDS."""
     trimmed = id_list[-MAX_STORED_IDS:]
     with open(POSTED_FILE, "w") as f:
         f.write("\n".join(trimmed) + "\n")
 
-def send_to_discord(link, content):
+
+def extract_image(description, base_url):
+    """Find the first image URL in the description and convert it to the
+    original pbs.twimg.com URL (more reliable in Discord)."""
+    if not description:
+        return None
+
+    match = re.search(r'<img[^>]+src="([^"]+)"', description)
+    if not match:
+        return None
+
+    img_url = html.unescape(match.group(1))
+
+    # Make relative URLs absolute first (e.g. /pic/... -> https://instance/pic/...)
+    if img_url.startswith("/"):
+        img_url = base_url.rstrip("/") + img_url
+
+    # --- Convert Nitter proxy URL back to original Twitter URL ---
+    # Nitter format: https://<instance>/pic/[orig/]media%2FFilename.jpg?params
+    pic_match = re.search(r'/pic/(?:orig/)?(.+)$', img_url)
+    if pic_match:
+        encoded_path = pic_match.group(1)
+        encoded_path = encoded_path.split("?")[0]      # strip query params
+        decoded_path = unquote(encoded_path)           # %2F -> /
+        twitter_url = "https://pbs.twimg.com/" + decoded_path
+        print(f"     Converted Nitter img -> {twitter_url}")
+        return twitter_url
+
+    return img_url
+
+
+def send_to_discord(link, content, image_url=None):
+    embed = {
+        "description": content,
+        "color": 0x1DA1F2,  # Twitter blue
+        "url": link,
+        "author": {"name": "🚨 HERE WE GO! 🚨"},
+        "footer": {"text": "Fabrizio Romano"}
+    }
+    if image_url:
+        embed["image"] = {"url": image_url}
+
     payload = {
-        "content": f"🚨 **HERE WE GO!** 🚨\n\n{content}\n\n[Read on X]({link})",
-        "username": "Lutay FootBot"
+        "content": f"[Read on X]({link})",
+        "username": "Fabrizio Tracker",
+        "embeds": [embed]
     }
     resp = requests.post(DISCORD_WEBHOOK, json=payload)
     print(f"Discord response: {resp.status_code}")
+
 
 def fetch_rss():
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -52,15 +97,16 @@ def fetch_rss():
             response = requests.get(url, headers=headers, timeout=15)
             if response.status_code == 200 and "<item>" in response.text:
                 print(f"✅ Success with {base}")
-                return response.text
+                return response.text, base
             else:
                 print(f"❌ {base} returned status {response.status_code} or no items")
         except Exception as e:
             print(f"❌ {base} failed: {e}")
-    return None
+    return None, None
+
 
 def main():
-    rss_data = fetch_rss()
+    rss_data, base_url = fetch_rss()
     if not rss_data:
         print("All Nitter instances failed. Exiting.")
         return
@@ -77,7 +123,7 @@ def main():
         return
 
     posted_ids = load_posted_ids()
-    posted_set = set(posted_ids)   # fast lookups
+    posted_set = set(posted_ids)
     print(f"\nLoaded {len(posted_ids)} previously posted IDs.")
     print(f"Found {len(items)} tweets in feed. Checking latest {TWEETS_TO_CHECK}.\n")
     print("=" * 60)
@@ -88,10 +134,12 @@ def main():
         title_el = item.find("title")
         link_el = item.find("link")
         guid_el = item.find("guid")
+        desc_el = item.find("description")
 
         tweet_text = html.unescape(title_el.text) if title_el is not None and title_el.text else ""
         tweet_link = link_el.text.strip() if link_el is not None and link_el.text else ""
         tweet_id = guid_el.text.strip() if guid_el is not None and guid_el.text else tweet_link
+        description = desc_el.text if desc_el is not None and desc_el.text else ""
 
         if not tweet_text or not tweet_id:
             print(f"[{i}] Empty fields, skipping.")
@@ -108,19 +156,20 @@ def main():
             continue
 
         if has_keyword:
-            print("     -> MATCH! Sending to Discord...\n")
-            send_to_discord(tweet_link, tweet_text)
+            image_url = extract_image(description, base_url)
+            print(f"     -> MATCH! Image: {image_url}")
+            print("     -> Sending to Discord...\n")
+            send_to_discord(tweet_link, tweet_text, image_url)
         else:
             print("     -> No keyword match.\n")
 
-        # Mark as seen either way
         posted_ids.append(tweet_id)
         posted_set.add(tweet_id)
 
-    # Save once at the end, trimmed to last MAX_STORED_IDS
     save_posted_ids(posted_ids)
     print("=" * 60)
     print(f"Done. Storing {min(len(posted_ids), MAX_STORED_IDS)} IDs.")
+
 
 if __name__ == "__main__":
     main()
