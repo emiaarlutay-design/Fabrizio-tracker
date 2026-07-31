@@ -1,13 +1,12 @@
-
 name: Check Fabrizio Tweets
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # Request every 5 minutes
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 permissions:
-  contents: write            # Needed to commit the posted_ids file
+  contents: write
 
 jobs:
   build:
@@ -24,6 +23,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      
       - name: Run Script
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
