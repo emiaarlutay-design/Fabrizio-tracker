@@ -1,3 +1,4 @@
+
 import requests
 import os
 import re
@@ -8,9 +9,9 @@ from email.utils import parsedate_to_datetime
 DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK')
 USERNAME = "FabrizioRomano"
 KEYWORD = "here we go"
+POSTED_FILE = "posted_ids.txt"
+TWEETS_TO_CHECK = 5
 
-# List of Nitter instances to try (fallback system)
-# If all these die, check https://status.d420.de/ for new working ones
 NITTER_INSTANCES = [
     "https://nitter.net",
     "https://nitter.poast.org",
@@ -20,16 +21,27 @@ NITTER_INSTANCES = [
     "https://xcancel.com"
 ]
 
+def load_posted_ids():
+    """Load the set of tweet IDs we've already sent to Discord."""
+    if os.path.exists(POSTED_FILE):
+        with open(POSTED_FILE, "r") as f:
+            return set(line.strip() for line in f if line.strip())
+    return set()
+
+def save_posted_id(tweet_id):
+    """Append a newly posted tweet ID to the file."""
+    with open(POSTED_FILE, "a") as f:
+        f.write(tweet_id + "\n")
+
 def send_to_discord(link, content):
     payload = {
         "content": f"🚨 **HERE WE GO!** 🚨\n\n{content}\n\n[Read on X]({link})",
-        "username": "Lutay FootBot"
+        "username": "Fabrizio Tracker"
     }
     resp = requests.post(DISCORD_WEBHOOK, json=payload)
     print(f"Discord response: {resp.status_code}")
 
 def fetch_rss():
-    """Try each instance until one returns valid data."""
     headers = {'User-Agent': 'Mozilla/5.0'}
     for base in NITTER_INSTANCES:
         url = f"{base}/{USERNAME}/rss"
@@ -47,7 +59,6 @@ def fetch_rss():
 
 def main():
     rss_data = fetch_rss()
-
     if not rss_data:
         print("All Nitter instances failed. Exiting.")
         return
@@ -57,37 +68,41 @@ def main():
         print("No tweets found in feed.")
         return
 
-    # Newest tweet is the first item
-    latest_item = items[0]
+    posted_ids = load_posted_ids()
+    print(f"Loaded {len(posted_ids)} previously posted IDs.")
 
-    title_match = re.search(r'<title>(.*?)</title>', latest_item)
-    link_match = re.search(r'<link>(.*?)</link>', latest_item)
-    date_match = re.search(r'<pubDate>(.*?)</pubDate>', latest_item)
+    # Check the latest N tweets (process oldest->newest so Discord order is chronological)
+    recent_items = items[:TWEETS_TO_CHECK]
 
-    if not (title_match and link_match and date_match):
-        print("Could not parse tweet fields.")
-        return
+    for item in reversed(recent_items):
+        title_match = re.search(r'<title>(.*?)</title>', item)
+        link_match = re.search(r'<link>(.*?)</link>', item)
+        guid_match = re.search(r'<guid>(.*?)</guid>', item)
 
-    tweet_text = title_match.group(1)
-    tweet_link = link_match.group(1)
-    pub_date_str = date_match.group(1)
+        if not (title_match and link_match and guid_match):
+            continue
 
-    # Check how old the tweet is
-    tweet_date = parsedate_to_datetime(pub_date_str)
-    now = datetime.now(tweet_date.tzinfo)
-    age_seconds = (now - tweet_date).total_seconds()
+        tweet_text = title_match.group(1)
+        tweet_link = link_match.group(1)
+        tweet_id = guid_match.group(1)
 
-    print(f"Latest tweet ({int(age_seconds)}s old): {tweet_text[:80]}")
+        # Skip if we've already posted this one
+        if tweet_id in posted_ids:
+            continue
 
-    # Only post if tweet is recent (within 15 mins) AND contains keyword
-    if age_seconds < 3600:
+        # Check for keyword
         if KEYWORD in tweet_text.lower():
-            print("MATCH! Sending to Discord...")
+            print(f"MATCH! Sending: {tweet_text[:80]}")
             send_to_discord(tweet_link, tweet_text)
+            save_posted_id(tweet_id)
+            posted_ids.add(tweet_id)
         else:
-            print("Recent tweet, but no keyword match.")
-    else:
-        print("Tweet too old, skipping.")
+            # Mark non-matching tweets as "seen" too, so we don't re-check them forever
+            save_posted_id(tweet_id)
+            posted_ids.add(tweet_id)
+            print(f"Seen (no match): {tweet_text[:60]}")
+
+    print("Done.")
 
 if __name__ == "__main__":
     main()
