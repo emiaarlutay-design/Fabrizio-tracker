@@ -8,24 +8,44 @@ from urllib.parse import unquote
 # CONFIGURATION
 DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK')
 USERNAME = "FabrizioRomano"
-KEYWORDS = ["here we go", "done deal"]
+KEYWORDS = ["here we go", "done deal", "medical booked", "medical scheduled"]
 POSTED_FILE = "posted_ids.txt"
 TWEETS_TO_CHECK = 20
 MAX_STORED_IDS = 100
 
-# --- CLUB -> ROLE PING MAPPING ---
-# For each club, list the keywords that identify it, and the role ID to ping.
-# The bot pings the matching club's role when a "here we go"/"done deal" mentions it.
+# --- CLUB -> PING MAPPING ---
+# Each club has:
+#   "keywords": phrases that identify the club in a tweet
+#   "pings": a list of things to ping. Each entry has an "id" and a "type"
+#            "type" is "role" (pings a role) or "user" (pings a person)
 CLUB_ROLES = {
     "Man UTD": {
         "keywords": ["manchester united", "man united", "man utd", "man u"],
-        "role_id": "1467577064046596137"
+        "pings": [
+            {"id": "901476549964988467", "type": "user"}
+        ]
     },
-    # Add more clubs here later, e.g.:
-    # "Arsenal": {
-    #     "keywords": ["arsenal"],
-    #     "role_id": "YOUR_ROLE_ID"
-    # },
+    "Real Madrid": {
+        "keywords": ["real madrid"],
+        "pings": [
+            {"id": "1054525567267000320", "type": "user"},
+            {"id": "1427048967698387035", "type": "user"}
+        ]
+    },
+    "FC Barcelona": {
+        "keywords": ["barcelona", "barca", "fc barcelona"],
+        "pings": [
+            {"id": "1449550570330521791", "type": "user"},
+            {"id": "1293909882675920906", "type": "user"}
+        ]
+    },
+    "Liverpool": {
+        "keywords": ["liverpool"],
+        "pings": [
+            {"id": "899442380816670771", "type": "user"}
+        ]
+    },
+    # Add more clubs here later
 }
 
 NITTER_INSTANCES = [
@@ -79,11 +99,15 @@ def extract_image(description, base_url):
 
 
 def get_ping(text_lower):
-    """Return a ping string for any clubs mentioned in the tweet, or empty."""
+    """Return ping string(s) for any clubs mentioned, roles or users."""
     pings = []
     for club_name, data in CLUB_ROLES.items():
         if any(kw in text_lower for kw in data["keywords"]):
-            pings.append(f"<@&{data['role_id']}>")
+            for p in data["pings"]:
+                if p.get("type") == "user":
+                    pings.append(f"<@{p['id']}>")       # user ping
+                else:
+                    pings.append(f"<@&{p['id']}>")      # role ping
             print(f"     -> Club match: {club_name}")
     return " ".join(pings)
 
@@ -106,9 +130,9 @@ def send_to_discord(link, content, image_url=None, ping=""):
 
     payload = {
         "content": msg_content,
-        "username": "Fabrizio Tracker",
+        "username": "Lutay FootBot",
         "embeds": [embed],
-        "allowed_mentions": {"parse": ["roles"]}  # allow role pings
+        "allowed_mentions": {"parse": ["roles", "users"]}  # allow role + user pings
     }
     resp = requests.post(DISCORD_WEBHOOK, json=payload)
     print(f"Discord response: {resp.status_code}")
