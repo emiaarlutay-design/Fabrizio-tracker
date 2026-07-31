@@ -8,7 +8,7 @@ DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK')
 USERNAME = "FabrizioRomano"
 KEYWORD = "here we go"
 POSTED_FILE = "posted_ids.txt"
-TWEETS_TO_CHECK = 5
+TWEETS_TO_CHECK = 20
 
 NITTER_INSTANCES = [
     "https://nitter.net",
@@ -34,7 +34,7 @@ def save_posted_id(tweet_id):
 def send_to_discord(link, content):
     payload = {
         "content": f"🚨 **HERE WE GO!** 🚨\n\n{content}\n\n[Read on X]({link})",
-        "username": "Fabrizio Tracker"
+        "username": "Lutay FootBot"
     }
     resp = requests.post(DISCORD_WEBHOOK, json=payload)
     print(f"Discord response: {resp.status_code}")
