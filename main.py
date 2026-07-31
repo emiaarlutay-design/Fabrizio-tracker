@@ -8,10 +8,25 @@ from urllib.parse import unquote
 # CONFIGURATION
 DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK')
 USERNAME = "FabrizioRomano"
-KEYWORDS = ["here we go", "done deal", "medical booked", "medical scheduled"]   # add more phrases here anytime
+KEYWORDS = ["here we go", "done deal"]
 POSTED_FILE = "posted_ids.txt"
 TWEETS_TO_CHECK = 20
 MAX_STORED_IDS = 100
+
+# --- CLUB -> ROLE PING MAPPING ---
+# For each club, list the keywords that identify it, and the role ID to ping.
+# The bot pings the matching club's role when a "here we go"/"done deal" mentions it.
+CLUB_ROLES = {
+    "Man UTD": {
+        "keywords": ["manchester united", "man united", "man utd", "man u"],
+        "role_id": "1467577064046596137"
+    },
+    # Add more clubs here later, e.g.:
+    # "Arsenal": {
+    #     "keywords": ["arsenal"],
+    #     "role_id": "YOUR_ROLE_ID"
+    # },
+}
 
 NITTER_INSTANCES = [
     "https://nitter.net",
@@ -39,8 +54,6 @@ def save_posted_ids(id_list):
 
 
 def extract_image(description, base_url):
-    """Find the first image URL in the description and convert it to the
-    original pbs.twimg.com URL (more reliable in Discord)."""
     if not description:
         return None
 
@@ -50,17 +63,14 @@ def extract_image(description, base_url):
 
     img_url = html.unescape(match.group(1))
 
-    # Make relative URLs absolute first (e.g. /pic/... -> https://instance/pic/...)
     if img_url.startswith("/"):
         img_url = base_url.rstrip("/") + img_url
 
-    # --- Convert Nitter proxy URL back to original Twitter URL ---
-    # Nitter format: https://<instance>/pic/[orig/]media%2FFilename.jpg?params
     pic_match = re.search(r'/pic/(?:orig/)?(.+)$', img_url)
     if pic_match:
         encoded_path = pic_match.group(1)
-        encoded_path = encoded_path.split("?")[0]      # strip query params
-        decoded_path = unquote(encoded_path)           # %2F -> /
+        encoded_path = encoded_path.split("?")[0]
+        decoded_path = unquote(encoded_path)
         twitter_url = "https://pbs.twimg.com/" + decoded_path
         print(f"     Converted Nitter img -> {twitter_url}")
         return twitter_url
@@ -68,10 +78,20 @@ def extract_image(description, base_url):
     return img_url
 
 
-def send_to_discord(link, content, image_url=None):
+def get_ping(text_lower):
+    """Return a ping string for any clubs mentioned in the tweet, or empty."""
+    pings = []
+    for club_name, data in CLUB_ROLES.items():
+        if any(kw in text_lower for kw in data["keywords"]):
+            pings.append(f"<@&{data['role_id']}>")
+            print(f"     -> Club match: {club_name}")
+    return " ".join(pings)
+
+
+def send_to_discord(link, content, image_url=None, ping=""):
     embed = {
         "description": content,
-        "color": 0x1DA1F2,  # Twitter blue
+        "color": 0xDA020E if ping else 0x1DA1F2,  # red if a club ping, else blue
         "url": link,
         "author": {"name": "🚨 HERE WE GO! 🚨"},
         "footer": {"text": "Fabrizio Romano"}
@@ -79,10 +99,16 @@ def send_to_discord(link, content, image_url=None):
     if image_url:
         embed["image"] = {"url": image_url}
 
+    if ping:
+        msg_content = f"{ping} 🔥 [Read on X]({link})"
+    else:
+        msg_content = f"[Read on X]({link})"
+
     payload = {
-        "content": f"[Read on X]({link})",
+        "content": msg_content,
         "username": "Fabrizio Tracker",
-        "embeds": [embed]
+        "embeds": [embed],
+        "allowed_mentions": {"parse": ["roles"]}  # allow role pings
     }
     resp = requests.post(DISCORD_WEBHOOK, json=payload)
     print(f"Discord response: {resp.status_code}")
@@ -158,9 +184,10 @@ def main():
 
         if has_keyword:
             image_url = extract_image(description, base_url)
-            print(f"     -> MATCH! Image: {image_url}")
+            ping = get_ping(text_lower)
+            print(f"     -> MATCH! Ping: {ping if ping else 'none'} | Image: {image_url}")
             print("     -> Sending to Discord...\n")
-            send_to_discord(tweet_link, tweet_text, image_url)
+            send_to_discord(tweet_link, tweet_text, image_url, ping)
         else:
             print("     -> No keyword match.\n")
 
