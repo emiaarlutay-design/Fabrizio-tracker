@@ -9,6 +9,7 @@ USERNAME = "FabrizioRomano"
 KEYWORD = "here we go"
 POSTED_FILE = "posted_ids.txt"
 TWEETS_TO_CHECK = 20
+MAX_STORED_IDS = 100   # keep only the last 100 IDs
 
 NITTER_INSTANCES = [
     "https://nitter.net",
@@ -22,14 +23,17 @@ NITTER_INSTANCES = [
 ]
 
 def load_posted_ids():
+    """Return list (ordered) of previously posted IDs."""
     if os.path.exists(POSTED_FILE):
         with open(POSTED_FILE, "r") as f:
-            return set(line.strip() for line in f if line.strip())
-    return set()
+            return [line.strip() for line in f if line.strip()]
+    return []
 
-def save_posted_id(tweet_id):
-    with open(POSTED_FILE, "a") as f:
-        f.write(tweet_id + "\n")
+def save_posted_ids(id_list):
+    """Rewrite the file, keeping only the most recent MAX_STORED_IDS."""
+    trimmed = id_list[-MAX_STORED_IDS:]
+    with open(POSTED_FILE, "w") as f:
+        f.write("\n".join(trimmed) + "\n")
 
 def send_to_discord(link, content):
     payload = {
@@ -61,20 +65,19 @@ def main():
         print("All Nitter instances failed. Exiting.")
         return
 
-    # Parse XML properly
     try:
         root = ET.fromstring(rss_data)
     except ET.ParseError as e:
         print(f"XML parse error: {e}")
         return
 
-    # RSS structure: rss > channel > item
     items = root.findall(".//item")
     if not items:
         print("No <item> elements found.")
         return
 
     posted_ids = load_posted_ids()
+    posted_set = set(posted_ids)   # fast lookups
     print(f"\nLoaded {len(posted_ids)} previously posted IDs.")
     print(f"Found {len(items)} tweets in feed. Checking latest {TWEETS_TO_CHECK}.\n")
     print("=" * 60)
@@ -94,11 +97,10 @@ def main():
             print(f"[{i}] Empty fields, skipping.")
             continue
 
-        already_seen = tweet_id in posted_ids
+        already_seen = tweet_id in posted_set
         has_keyword = KEYWORD in tweet_text.lower()
 
         print(f"[{i}] TEXT: {tweet_text[:100]}")
-        print(f"     ID: {tweet_id}")
         print(f"     Already seen? {already_seen} | Has keyword? {has_keyword}")
 
         if already_seen:
@@ -111,11 +113,14 @@ def main():
         else:
             print("     -> No keyword match.\n")
 
-        save_posted_id(tweet_id)
-        posted_ids.add(tweet_id)
+        # Mark as seen either way
+        posted_ids.append(tweet_id)
+        posted_set.add(tweet_id)
 
+    # Save once at the end, trimmed to last MAX_STORED_IDS
+    save_posted_ids(posted_ids)
     print("=" * 60)
-    print("Done.")
+    print(f"Done. Storing {min(len(posted_ids), MAX_STORED_IDS)} IDs.")
 
 if __name__ == "__main__":
     main()
