@@ -2,22 +2,35 @@ import requests
 import os
 import html
 import re
+import time
 import xml.etree.ElementTree as ET
 from urllib.parse import unquote
+from datetime import datetime, timezone
 
+# ============================================================
 # CONFIGURATION
+# ============================================================
 DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK')
 USERNAME = "FabrizioRomano"
 KEYWORDS = ["here we go", "done deal", "medical booked", "medical scheduled"]
 POSTED_FILE = "posted_ids.txt"
 TWEETS_TO_CHECK = 20
-MAX_STORED_IDS = 100
 
-# --- CLUB -> PING MAPPING ---
-# Each club has:
-#   "keywords": phrases that identify the club in a tweet
-#   "pings": a list of things to ping. Each entry has an "id" and a "type"
-#            "type" is "role" (pings a role) or "user" (pings a person)
+# --- Safety / behavior settings ---
+DRY_RUN = False              # True = test mode, prints instead of posting
+MAX_POSTS_PER_RUN = 5        # hard cap so it can never spam
+POST_DELAY_SECONDS = 1       # wait between posts (avoid Discord rate limits)
+PROXIMITY_LIMIT = 100        # club name must be within N chars of keyword
+
+# --- Trim settings ---
+TRIM_THRESHOLD = 100         # when file exceeds this many lines...
+TRIM_KEEP = 80               # ...cut back to this many (keeps newest)
+
+# ============================================================
+# CLUB -> PING MAPPING
+# "keywords": phrases that identify the club
+# "pings": list of {"id": ..., "type": "user" or "role"}
+# ============================================================
 CLUB_ROLES = {
     "Man UTD": {
         "keywords": ["manchester united", "man united", "man utd", "man u"],
@@ -60,16 +73,14 @@ NITTER_INSTANCES = [
 ]
 
 
+# ============================================================
+# STATE (posted IDs) HANDLING
+# ============================================================
 def load_posted_ids():
     if os.path.exists(POSTED_FILE):
         with open(POSTED_FILE, "r") as f:
             return [line.strip() for line in f if line.strip()]
     return []
-
-
-# --- TRIM SETTINGS ---
-TRIM_THRESHOLD = 100   # when the file goes over this many lines...
-TRIM_KEEP = 80         # ...cut it back down to this many (keeps newest)
 
 
 def save_posted_ids(id_list):
@@ -82,6 +93,20 @@ def save_posted_ids(id_list):
         f.write("\n".join(id_list) + "\n")
 
 
+def normalize_id(raw_id, link):
+    """Extract just the numeric tweet ID so it's identical across all
+    Nitter instances (prevents duplicate posts)."""
+    for source in (raw_id, link):
+        if source:
+            m = re.search(r'status/(\d+)', source)
+            if m:
+                return m.group(1)
+    return raw_id
+
+
+# ============================================================
+# IMAGE EXTRACTION
+# ============================================================
 def extract_image(description, base_url):
     if not description:
         return None
@@ -107,27 +132,72 @@ def extract_image(description, base_url):
     return img_url
 
 
+# ============================================================
+# PING LOGIC (with proximity check)
+# ============================================================
 def get_ping(text_lower):
-    """Return ping string(s) for any clubs mentioned, roles or users."""
+    """Ping a club ONLY if its name appears near a keyword phrase,
+    so we don't ping a team just mentioned in passing."""
+    # Find every position where a keyword phrase occurs
+    keyword_spans = []
+    for kw in KEYWORDS:
+        start = 0
+        while True:
+            idx = text_lower.find(kw, start)
+            if idx == -1:
+                break
+            keyword_spans.append((idx, idx + len(kw)))
+            start = idx + 1
+
+    if not keyword_spans:
+        return ""
+
     pings = []
     for club_name, data in CLUB_ROLES.items():
-        if any(kw in text_lower for kw in data["keywords"]):
+        matched = False
+        for kw in data["keywords"]:
+            start = 0
+            while not matched:
+                idx = text_lower.find(kw, start)
+                if idx == -1:
+                    break
+                club_start, club_end = idx, idx + len(kw)
+                for (k_start, k_end) in keyword_spans:
+                    gap = max(club_start, k_start) - min(club_end, k_end)
+                    if gap <= PROXIMITY_LIMIT:
+                        matched = True
+                        break
+                start = idx + 1
+            if matched:
+                break
+
+        if matched:
             for p in data["pings"]:
                 if p.get("type") == "user":
-                    pings.append(f"<@{p['id']}>")       # user ping
+                    pings.append(f"<@{p['id']}>")
                 else:
-                    pings.append(f"<@&{p['id']}>")      # role ping
-            print(f"     -> Club match: {club_name}")
+                    pings.append(f"<@&{p['id']}>")
+            print(f"     -> Club match (near keyword): {club_name}")
+
     return " ".join(pings)
 
 
+# ============================================================
+# DISCORD POSTING
+# ============================================================
 def send_to_discord(link, content, image_url=None, ping=""):
+    """Send a message. Returns True only if Discord confirms success."""
+    if DRY_RUN:
+        print(f"     [DRY RUN] Would post (ping={ping or 'none'}): {content[:70]}")
+        return True
+
     embed = {
         "description": content,
-        "color": 0xDA020E if ping else 0x1DA1F2,  # red if a club ping, else blue
+        "color": 0xDA020E if ping else 0x1DA1F2,  # red if ping, else blue
         "url": link,
         "author": {"name": "🚨 HERE WE GO! 🚨"},
-        "footer": {"text": "Fabrizio Romano"}
+        "footer": {"text": "Fabrizio Romano"},
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
     if image_url:
         embed["image"] = {"url": image_url}
@@ -141,12 +211,28 @@ def send_to_discord(link, content, image_url=None, ping=""):
         "content": msg_content,
         "username": "Lutay FootBot",
         "embeds": [embed],
-        "allowed_mentions": {"parse": ["roles", "users"]}  # allow role + user pings
+        "allowed_mentions": {"parse": ["roles", "users"]}
     }
-    resp = requests.post(DISCORD_WEBHOOK, json=payload)
-    print(f"Discord response: {resp.status_code}")
+
+    try:
+        resp = requests.post(DISCORD_WEBHOOK, json=payload, timeout=15)
+        print(f"     Discord response: {resp.status_code}")
+        # Handle rate limit explicitly
+        if resp.status_code == 429:
+            retry = resp.json().get("retry_after", 2)
+            print(f"     Rate limited, waiting {retry}s and retrying once...")
+            time.sleep(float(retry) + 0.5)
+            resp = requests.post(DISCORD_WEBHOOK, json=payload, timeout=15)
+            print(f"     Retry response: {resp.status_code}")
+        return resp.status_code in (200, 204)
+    except Exception as e:
+        print(f"     Discord error: {e}")
+        return False
 
 
+# ============================================================
+# RSS FETCHING
+# ============================================================
 def fetch_rss():
     headers = {'User-Agent': 'Mozilla/5.0'}
     for base in NITTER_INSTANCES:
@@ -164,6 +250,9 @@ def fetch_rss():
     return None, None
 
 
+# ============================================================
+# MAIN
+# ============================================================
 def main():
     rss_data, base_url = fetch_rss()
     if not rss_data:
@@ -183,8 +272,12 @@ def main():
 
     posted_ids = load_posted_ids()
     posted_set = set(posted_ids)
+    posts_this_run = 0
+
     print(f"\nLoaded {len(posted_ids)} previously posted IDs.")
-    print(f"Found {len(items)} tweets in feed. Checking latest {TWEETS_TO_CHECK}.\n")
+    print(f"Found {len(items)} tweets in feed. Checking latest {TWEETS_TO_CHECK}.")
+    if DRY_RUN:
+        print("⚠️  DRY_RUN is ON — nothing will actually be posted.")
     print("=" * 60)
 
     recent_items = items[:TWEETS_TO_CHECK]
@@ -217,32 +310,38 @@ def main():
             continue
 
         if has_keyword:
+            # Anti-spam safety cap
+            if posts_this_run >= MAX_POSTS_PER_RUN:
+                print("     -> Reached MAX_POSTS_PER_RUN, marking seen & skipping.\n")
+                posted_ids.append(tweet_id)
+                posted_set.add(tweet_id)
+                continue
+
             image_url = extract_image(description, base_url)
             ping = get_ping(text_lower)
             print(f"     -> MATCH! Ping: {ping if ping else 'none'} | Image: {image_url}")
-            print("     -> Sending to Discord...\n")
-            send_to_discord(tweet_link, tweet_text, image_url, ping)
+            print("     -> Sending to Discord...")
+
+            success = send_to_discord(tweet_link, tweet_text, image_url, ping)
+
+            if success:
+                posts_this_run += 1
+                posted_ids.append(tweet_id)
+                posted_set.add(tweet_id)
+                print(f"     -> Posted OK ({posts_this_run}/{MAX_POSTS_PER_RUN})\n")
+                time.sleep(POST_DELAY_SECONDS)  # avoid rate limits
+            else:
+                # Don't mark as seen -> will retry next run
+                print("     -> Discord FAILED, will retry next run.\n")
         else:
             print("     -> No keyword match.\n")
-
-        posted_ids.append(tweet_id)
-        posted_set.add(tweet_id)
+            # Mark non-matching tweets as seen so we don't re-check forever
+            posted_ids.append(tweet_id)
+            posted_set.add(tweet_id)
 
     save_posted_ids(posted_ids)
     print("=" * 60)
-    print(f"Done. Storing {len(posted_ids)} IDs.")
-
-def normalize_id(raw_id, link):
-    """Extract just the numeric tweet ID so it's the same across all
-    Nitter instances (prevents duplicate posts)."""
-    # Try to find status/<numbers> in the guid or link
-    for source in (raw_id, link):
-        if source:
-            m = re.search(r'status/(\d+)', source)
-            if m:
-                return m.group(1)
-    # Fallback: strip instance domain, keep the path
-    return raw_id
+    print(f"Done. Posted {posts_this_run} this run. Storing {len(posted_ids)} IDs.")
 
 
 if __name__ == "__main__":
