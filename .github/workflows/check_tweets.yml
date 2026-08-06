@@ -2,11 +2,11 @@ name: Check Fabrizio Tweets
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
+    - cron: '*/5 * * * *'   # backup schedule (cron-job.org is your main trigger)
+  workflow_dispatch:         # allows manual runs + external API triggers
 
 permissions:
-  contents: write
+  contents: write            # needed to commit state files
 
 jobs:
   build:
@@ -23,23 +23,20 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
-        
+
       - name: Run Script
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          HEALTH_WEBHOOK: ${{ secrets.HEALTH_WEBHOOK }}
         run: python main.py
 
-      - name: Commit updated posted IDs
+      - name: Commit updated files
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          touch posted_ids.txt
-          git add posted_ids.txt
+          touch posted_ids.txt health_state.txt
+          git add posted_ids.txt health_state.txt
           git diff --staged --quiet && echo "No changes" && exit 0
-          git commit -m "Update posted IDs"
-          # Pull latest before pushing to avoid conflicts from overlapping runs
+          git commit -m "Update state files"
           git pull --rebase --autostash origin main
           git push
-
-
-             
