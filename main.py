@@ -230,7 +230,7 @@ def main():
 
     save_posted_ids(posted_ids)
     print("=" * 60)
-    print(f"Done. Storing {min(len(posted_ids), MAX_STORED_IDS)} IDs.")
+    print(f"Done. Storing {len(posted_ids)} IDs.")
 
 def normalize_id(raw_id, link):
     """Extract just the numeric tweet ID so it's the same across all
