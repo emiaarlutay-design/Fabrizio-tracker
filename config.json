@@ -1,0 +1,47 @@
+{
+  "keywords": ["here we go", "done deal", "medical booked", "medical scheduled"],
+  "big_money_threshold": 40,
+  "milestone_every": 50,
+  "nitter_instances": [
+    "https://nitter.net",
+    "https://nitter.poast.org",
+    "https://nitter.tiekoetter.com",
+    "https://lightbrd.com",
+    "https://nitter.privacyredirect.com",
+    "https://xcancel.com",
+    "https://nitter.space",
+    "https://nitter.kuuro.net"
+  ],
+  "clubs": {
+    "Man UTD": {
+      "keywords": ["manchester united", "man united", "man utd", "man u"],
+      "pings": [{"id": "901476549964988467", "type": "user"}],
+      "crest": "https://a.espncdn.com/i/teamlogos/soccer/500/360.png",
+      "emoji": "🔴"
+    },
+    "Real Madrid": {
+      "keywords": ["real madrid"],
+      "pings": [
+        {"id": "1054525567267000320", "type": "user"},
+        {"id": "1427048967698387035", "type": "user"}
+      ],
+      "crest": "https://a.espncdn.com/i/teamlogos/soccer/500/86.png",
+      "emoji": "⚪"
+    },
+    "FC Barcelona": {
+      "keywords": ["barcelona", "barca", "fc barcelona"],
+      "pings": [
+        {"id": "1449550570330521791", "type": "user"},
+        {"id": "1293909882675920906", "type": "user"}
+      ],
+      "crest": "https://a.espncdn.com/i/teamlogos/soccer/500/83.png",
+      "emoji": "🔵"
+    },
+    "Liverpool": {
+      "keywords": ["liverpool"],
+      "pings": [{"id": "899442380816670771", "type": "user"}],
+      "crest": "https://a.espncdn.com/i/teamlogos/soccer/500/364.png",
+      "emoji": "❤️"
+    }
+  }
+}
