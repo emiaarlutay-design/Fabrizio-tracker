@@ -2,11 +2,11 @@ name: Check Fabrizio Tweets
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # backup schedule (cron-job.org is your main trigger)
-  workflow_dispatch:         # allows manual runs + external API triggers
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 permissions:
-  contents: write            # needed to commit state files
+  contents: write
 
 jobs:
   build:
@@ -21,6 +21,9 @@ jobs:
           python-version: '3.9'
           cache: 'pip'
 
+      - name: Install fonts for transfer cards
+        run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core
+
       - name: Install dependencies
         run: pip install -r requirements.txt
 
@@ -28,14 +31,15 @@ jobs:
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           HEALTH_WEBHOOK: ${{ secrets.HEALTH_WEBHOOK }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: python main.py
 
       - name: Commit updated files
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          touch posted_ids.txt health_state.txt
-          git add posted_ids.txt health_state.txt
+          touch posted_ids.txt health_state.txt stats.json
+          git add posted_ids.txt health_state.txt stats.json
           git diff --staged --quiet && echo "No changes" && exit 0
           git commit -m "Update state files"
           git pull --rebase --autostash origin main
