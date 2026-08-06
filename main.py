@@ -67,10 +67,19 @@ def load_posted_ids():
     return []
 
 
+# --- TRIM SETTINGS ---
+TRIM_THRESHOLD = 100   # when the file goes over this many lines...
+TRIM_KEEP = 80         # ...cut it back down to this many (keeps newest)
+
+
 def save_posted_ids(id_list):
-    trimmed = id_list[-MAX_STORED_IDS:]
+    """Save IDs. Only trims when the list exceeds TRIM_THRESHOLD,
+    then keeps the newest TRIM_KEEP entries."""
+    if len(id_list) > TRIM_THRESHOLD:
+        id_list = id_list[-TRIM_KEEP:]
+        print(f"Trimmed posted_ids down to last {TRIM_KEEP} entries.")
     with open(POSTED_FILE, "w") as f:
-        f.write("\n".join(trimmed) + "\n")
+        f.write("\n".join(id_list) + "\n")
 
 
 def extract_image(description, base_url):
