@@ -188,7 +188,8 @@ def main():
 
         tweet_text = html.unescape(title_el.text) if title_el is not None and title_el.text else ""
         tweet_link = link_el.text.strip() if link_el is not None and link_el.text else ""
-        tweet_id = guid_el.text.strip() if guid_el is not None and guid_el.text else tweet_link
+        raw_id = guid_el.text.strip() if guid_el is not None and guid_el.text else tweet_link
+        tweet_id = normalize_id(raw_id, tweet_link)
         description = desc_el.text if desc_el is not None and desc_el.text else ""
 
         if not tweet_text or not tweet_id:
@@ -221,6 +222,18 @@ def main():
     save_posted_ids(posted_ids)
     print("=" * 60)
     print(f"Done. Storing {min(len(posted_ids), MAX_STORED_IDS)} IDs.")
+
+def normalize_id(raw_id, link):
+    """Extract just the numeric tweet ID so it's the same across all
+    Nitter instances (prevents duplicate posts)."""
+    # Try to find status/<numbers> in the guid or link
+    for source in (raw_id, link):
+        if source:
+            m = re.search(r'status/(\d+)', source)
+            if m:
+                return m.group(1)
+    # Fallback: strip instance domain, keep the path
+    return raw_id
 
 
 if __name__ == "__main__":
