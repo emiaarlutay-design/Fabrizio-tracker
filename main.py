@@ -4,17 +4,9 @@ import html
 import re
 import time
 import json
-import textwrap
-import io
 import xml.etree.ElementTree as ET
 from urllib.parse import unquote, quote
 from datetime import datetime, timezone
-
-try:
-    from PIL import Image, ImageDraw, ImageFont
-    PIL_AVAILABLE = True
-except ImportError:
-    PIL_AVAILABLE = False
 
 # ============================================================
 # LOAD CONFIG (#32)
@@ -254,99 +246,14 @@ def build_ping_string(matches):
 
 
 # ============================================================
-# #30 TRANSFER CARD IMAGE
-# ============================================================
-def get_font(size, bold=False):
-    paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold
-        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    for p in paths:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, size)
-            except Exception:
-                pass
-    return ImageFont.load_default()
-
-
-def generate_transfer_card(tweet_text, money_display, deal_type, crest_url):
-    """Return PNG bytes of a transfer card, or None on failure."""
-    if not PIL_AVAILABLE:
-        return None
-    try:
-        W, H = 1000, 440
-        img = Image.new("RGB", (W, H), (20, 24, 33))
-        draw = ImageDraw.Draw(img)
-
-        # Top accent bar
-        draw.rectangle([0, 0, W, 12], fill=(29, 161, 242))
-
-        # Header
-        header_font = get_font(52, bold=True)
-        draw.text((40, 40), "HERE WE GO!", font=header_font, fill=(255, 255, 255))
-
-        # Crest (right side)
-        crest_x = W - 220
-        if crest_url:
-            try:
-                r = requests.get(crest_url, timeout=10)
-                crest = Image.open(io.BytesIO(r.content)).convert("RGBA")
-                crest = crest.resize((170, 170))
-                img.paste(crest, (crest_x, 40), crest)
-            except Exception as e:
-                print(f"     Card crest failed: {e}")
-
-        # Tweet text (wrapped)
-        body_font = get_font(30, bold=False)
-        wrapped = textwrap.wrap(tweet_text, width=42)[:6]
-        y = 140
-        for line in wrapped:
-            draw.text((40, y), line, font=body_font, fill=(220, 224, 230))
-            y += 40
-
-        # Fee badge (#3)
-        badge_font = get_font(34, bold=True)
-        by = H - 90
-        if money_display:
-            draw.rounded_rectangle([40, by, 240, by + 55], radius=12,
-                                   fill=(255, 215, 0))
-            draw.text((60, by + 8), f"💵 {money_display}".replace("💵 ", ""),
-                      font=badge_font, fill=(20, 24, 33))
-
-        # Deal type badge (#17)
-        if deal_type:
-            clean = re.sub(r'[^\x00-\x7F]', '', deal_type).strip()
-            small = get_font(26, bold=True)
-            dx = 260 if money_display else 40
-            draw.rounded_rectangle([dx, by, dx + 260, by + 55], radius=12,
-                                   fill=(40, 46, 58))
-            draw.text((dx + 15, by + 12), clean, font=small, fill=(220, 224, 230))
-
-        # Footer
-        foot = get_font(22, bold=False)
-        draw.text((40, H - 30), "via Fabrizio Romano", font=foot,
-                  fill=(120, 128, 140))
-
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        buf.seek(0)
-        return buf.getvalue()
-    except Exception as e:
-        print(f"     Card generation failed: {e}")
-        return None
-
-
-# ============================================================
 # DISCORD POSTING (returns message id + channel id for reactions)
 # ============================================================
 def send_to_discord(link, content, image_url=None, ping="",
                     crest=None, money_display=None, is_big_money=False,
-                    has_video=False, deal_type=None, card_bytes=None):
+                    has_video=False, deal_type=None):
     if DRY_RUN:
         print(f"     [DRY RUN] ping={ping or 'none'} money={money_display} "
-              f"deal={deal_type} video={has_video} card={'yes' if card_bytes else 'no'}")
+              f"deal={deal_type} video={has_video} image={image_url}")
         return None, None
 
     color = 0xFFD700 if is_big_money else (0xDA020E if ping else 0x1DA1F2)
@@ -373,10 +280,8 @@ def send_to_discord(link, content, image_url=None, ping="",
     if fields:
         embed["fields"] = fields
 
-    # If we have a card, use it as the image via attachment; else the tweet photo
-    if card_bytes:
-        embed["image"] = {"url": "attachment://card.png"}
-    elif image_url:
+    # Use Fabrizio's real tweet photo
+    if image_url:
         embed["image"] = {"url": image_url}
 
     msg_content = f"{ping} 🔥 [Read on X]({link})" if ping else f"[Read on X]({link})"
@@ -392,25 +297,14 @@ def send_to_discord(link, content, image_url=None, ping="",
     url = DISCORD_WEBHOOK + ("&wait=true" if "?" in DISCORD_WEBHOOK else "?wait=true")
 
     try:
-        if card_bytes:
-            files = {"file": ("card.png", card_bytes, "image/png")}
-            data = {"payload_json": json.dumps(payload)}
-            resp = requests.post(url, data=data, files=files, timeout=20)
-        else:
-            resp = requests.post(url, json=payload, timeout=15)
-
+        resp = requests.post(url, json=payload, timeout=15)
         print(f"     Discord response: {resp.status_code}")
 
         if resp.status_code == 429:
             retry = resp.json().get("retry_after", 2)
             print(f"     Rate limited, waiting {retry}s...")
             time.sleep(float(retry) + 0.5)
-            if card_bytes:
-                resp = requests.post(url, data={"payload_json": json.dumps(payload)},
-                                     files={"file": ("card.png", card_bytes, "image/png")},
-                                     timeout=20)
-            else:
-                resp = requests.post(url, json=payload, timeout=15)
+            resp = requests.post(url, json=payload, timeout=15)
             print(f"     Retry: {resp.status_code}")
 
         if resp.status_code in (200, 204):
@@ -470,7 +364,6 @@ def send_milestone(total):
 def fetch_rss(stats):
     headers = {'User-Agent': 'Mozilla/5.0'}
     success_map = stats.get("instance_success", {})
-    # Sort instances by past success (most reliable first)
     ordered = sorted(NITTER_INSTANCES,
                      key=lambda u: success_map.get(u, 0), reverse=True)
     for base in ordered:
@@ -577,15 +470,13 @@ def main():
             is_big = money_value >= BIG_MONEY_THRESHOLD
             deal_type = detect_deal_type(text_lower)
 
-            card = generate_transfer_card(tweet_text, money_display, deal_type, crest)
-
             print(f"     -> POSTING | ping={ping or 'none'} money={money_display} "
-                  f"big={is_big} deal={deal_type} video={has_video} card={'yes' if card else 'no'}")
+                  f"big={is_big} deal={deal_type} video={has_video} image={image_url}")
 
             msg_id, chan_id = send_to_discord(
                 tweet_link, tweet_text, image_url, ping,
                 crest=crest, money_display=money_display, is_big_money=is_big,
-                has_video=has_video, deal_type=deal_type, card_bytes=card
+                has_video=has_video, deal_type=deal_type
             )
 
             success = (msg_id is not None) or DRY_RUN
