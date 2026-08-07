@@ -42,7 +42,8 @@ ALERT_AFTER_FAILURES = 5
 TRIM_THRESHOLD = 100
 TRIM_KEEP = 80
 
-FABRIZIO_AVATAR = "https://pbs.twimg.com/profile_images/874276197357596672/kUuht00m_400x400.jpg"
+# Fallback avatar (auto-updated from the RSS feed at runtime)
+FABRIZIO_AVATAR = "https://pbs.twimg.com/profile_images/1926440348094681088/x9Ak9pDl_400x400.jpg"
 
 
 # ============================================================
@@ -118,6 +119,25 @@ def send_health_alert(message):
         print("Health alert sent.")
     except Exception as e:
         print(f"Health alert failed: {e}")
+
+
+# ============================================================
+# AVATAR (self-updating from RSS feed)
+# ============================================================
+def extract_channel_avatar(rss_data, base_url):
+    """Pull Fabrizio's current profile image from the RSS feed itself."""
+    m = re.search(r'<image>.*?<url>(.*?)</url>.*?</image>', rss_data, re.DOTALL)
+    if not m:
+        m = re.search(r'<webfeeds:icon>(.*?)</webfeeds:icon>', rss_data)
+    if m:
+        url = html.unescape(m.group(1).strip())
+        if url.startswith("/"):
+            url = base_url.rstrip("/") + url
+        pic_match = re.search(r'/pic/(?:orig/)?(.+)$', url)
+        if pic_match:
+            url = "https://pbs.twimg.com/" + unquote(pic_match.group(1).split("?")[0])
+        return url
+    return None
 
 
 # ============================================================
@@ -289,6 +309,7 @@ def send_to_discord(link, content, image_url=None, ping="",
     payload = {
         "content": msg_content,
         "username": "Lutay FootBot",
+        "avatar_url": FABRIZIO_AVATAR,
         "embeds": [embed],
         "allowed_mentions": {"parse": ["roles", "users"]}
     }
@@ -349,7 +370,8 @@ def add_reactions(channel_id, message_id, emojis):
 def send_milestone(total):
     payload = {
         "content": f"🎉 **MILESTONE!** 🎉\nThe bot has now tracked **{total}** confirmed transfers! 🚨⚽",
-        "username": "Lutay FootBot"
+        "username": "Lutay FootBot",
+        "avatar_url": FABRIZIO_AVATAR
     }
     try:
         requests.post(DISCORD_WEBHOOK, json=payload, timeout=15)
@@ -388,6 +410,8 @@ def fetch_rss(stats):
 # MAIN
 # ============================================================
 def main():
+    global FABRIZIO_AVATAR
+
     stats = load_stats()
     rss_data, base_url = fetch_rss(stats)
 
@@ -406,6 +430,12 @@ def main():
             send_health_alert("✅ Recovered! Nitter is reachable again.")
         if failures != 0:
             save_failure_count(0)
+
+    # Grab Fabrizio's current avatar from the feed (self-updating, no more Trump!)
+    live_avatar = extract_channel_avatar(rss_data, base_url)
+    if live_avatar:
+        FABRIZIO_AVATAR = live_avatar
+        print(f"Using live avatar: {live_avatar}")
 
     try:
         root = ET.fromstring(rss_data)
